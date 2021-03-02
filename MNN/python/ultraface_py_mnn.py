@@ -17,6 +17,7 @@ import MNN
 import cv2
 import numpy as np
 import torch
+from tqdm import tqdm
 
 sys.path.append('../../')
 import vision.utils.box_utils_numpy as box_utils
@@ -25,7 +26,7 @@ parser = argparse.ArgumentParser(description='run ultraface with MNN in py')
 parser.add_argument('--model_path', default="../model/version-RFB/RFB-320.mnn", type=str, help='model path')
 parser.add_argument('--input_size', default="320,240", type=str,
                     help='define network input size,format: width,height')
-parser.add_argument('--threshold', default=0.7, type=float, help='score threshold')
+parser.add_argument('--threshold', default=0.95, type=float, help='score threshold')
 parser.add_argument('--imgs_path', default="../imgs", type=str, help='imgs dir')
 parser.add_argument('--results_path', default="results", type=str, help='results dir')
 args = parser.parse_args()
@@ -115,37 +116,48 @@ def inference():
     if not os.path.exists(result_path):
         os.makedirs(result_path)
     listdir = os.listdir(imgs_path)
-    for file_path in listdir:
-        img_path = os.path.join(imgs_path, file_path)
-        image_ori = cv2.imread(img_path)
-        interpreter = MNN.Interpreter(args.model_path)
-        session = interpreter.createSession()
-        input_tensor = interpreter.getSessionInput(session)
-        image = cv2.cvtColor(image_ori, cv2.COLOR_BGR2RGB)
-        image = cv2.resize(image, tuple(input_size))
-        image = image.astype(float)
-        image = (image - image_mean) / image_std
-        image = image.transpose((2, 0, 1))
-        tmp_input = MNN.Tensor((1, 3, input_size[1], input_size[0]), MNN.Halide_Type_Float, image, MNN.Tensor_DimensionType_Caffe)
-        input_tensor.copyFrom(tmp_input)
-        time_time = time.time()
-        interpreter.runSession(session)
-        scores = interpreter.getSessionOutput(session, "scores").getData()
-        boxes = interpreter.getSessionOutput(session, "boxes").getData()
-        boxes = np.expand_dims(np.reshape(boxes, (-1, 4)), axis=0)
-        scores = np.expand_dims(np.reshape(scores, (-1, 2)), axis=0)
-        print("inference time: {} s".format(round(time.time() - time_time, 4)))
-        boxes = box_utils.convert_locations_to_boxes(boxes, priors, center_variance, size_variance)
-        boxes = box_utils.center_form_to_corner_form(boxes)
-        boxes, labels, probs = predict(image_ori.shape[1], image_ori.shape[0], scores, boxes, args.threshold)
-        for i in range(boxes.shape[0]):
-            box = boxes[i, :]
-            cv2.rectangle(image_ori, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 2)
-        cv2.imwrite(os.path.join(result_path, file_path), image_ori)
-        print("result_pic is written to {}".format(os.path.join(result_path, file_path)))
-        cv2.imshow("UltraFace_mnn_py", image_ori)
-        cv2.waitKey(-1)
-    cv2.destroyAllWindows()
+    for file_path in tqdm(listdir):
+        try:
+            img_path = os.path.join(imgs_path, file_path)
+            image_ori = cv2.imread(img_path)
+            interpreter = MNN.Interpreter(args.model_path)
+            session = interpreter.createSession()
+            input_tensor = interpreter.getSessionInput(session)
+            image = cv2.cvtColor(image_ori, cv2.COLOR_BGR2RGB)
+            image = cv2.resize(image, tuple(input_size))
+            image = image.astype(float)
+            image = (image - image_mean) / image_std
+            image = image.transpose((2, 0, 1))
+            image = image.astype(np.float32)
+            tmp_input = MNN.Tensor((1, 3, input_size[1], input_size[0]), MNN.Halide_Type_Float, image,
+                                   MNN.Tensor_DimensionType_Caffe)
+            input_tensor.copyFrom(tmp_input)
+            time_time = time.time()
+            interpreter.runSession(session)
+            scores = interpreter.getSessionOutput(session, "scores").getData()
+            boxes = interpreter.getSessionOutput(session, "boxes").getData()
+            boxes = np.expand_dims(np.reshape(boxes, (-1, 4)), axis=0)
+            scores = np.expand_dims(np.reshape(scores, (-1, 2)), axis=0)
+            print("inference time: {} s".format(round(time.time() - time_time, 4)))
+            boxes = box_utils.convert_locations_to_boxes(boxes, priors, center_variance, size_variance)
+            boxes = box_utils.center_form_to_corner_form(boxes)
+            boxes, labels, probs = predict(image_ori.shape[1], image_ori.shape[0], scores, boxes, args.threshold)
+            if boxes.shape[0] > 0:
+                for i in range(boxes.shape[0]):
+                    box = boxes[i, :]
+                    cv2.rectangle(image_ori, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 2)
+                    label = labels[i]
+                    result_path_label = os.path.join(result_path, str(label))
+                    if not os.path.exists(result_path_label):
+                        os.makedirs(result_path_label)
+                    cv2.imwrite(os.path.join(result_path_label, file_path), image_ori)
+                # cv2.imwrite(os.path.join(result_path, file_path), image_ori)
+                print("result_pic is written to {}".format(os.path.join(result_path, file_path)))
+                # cv2.imshow("UltraFace_mnn_py", image_ori)
+                # cv2.waitKey(-1)
+        except Exception as e:
+            print(e)
+    # cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
